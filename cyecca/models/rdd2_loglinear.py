@@ -3,6 +3,7 @@ import os
 import sys
 import math
 import numpy as np
+import control
 import matplotlib.pyplot as plt
 from pathlib import Path
 import casadi as ca
@@ -20,7 +21,7 @@ print("python: ", sys.executable)
 
 # parameters
 g = 9.8  # grav accel m/s^2
-m = 2.24  # mass of vehicle
+m = 2.0  # mass of vehicle
 # thrust_delta = 0.9*m*g # thrust delta from trim
 # thrust_trim = m*g # thrust trim
 deg2rad = np.pi / 180  # degree to radian
@@ -130,6 +131,22 @@ def derive_so3_attitude_control():
 
     return {"so3_attitude_control": f_attitude_control}
 
+def adC_matrix():
+    adC = ca.SX(9,9)
+    adC[0, 3] = 1
+    adC[1, 4] = 1
+    adC[2, 5] = 1
+
+    return adC
+
+def se23_solve_control():
+    A = -ca.DM(se23.elem(ca.vertcat(0,0,0,0,0,9.8,0,0,0)).ad()+adC_matrix())
+    B = ca.DM.eye(9)
+    Q = 2800*ca.DM.eye(9)  # penalize state
+    R = 1*ca.DM.eye(9)  # penalize input
+    K, _, _ = control.lqr(A, B, Q, R) 
+    BK = B@K
+    return B, K, BK , A+B@K
 
 def derive_outerloop_control():
     """
@@ -150,22 +167,24 @@ def derive_outerloop_control():
     # outputs: thrust force, angular errors
     zeta = ca.SX.sym("zeta", 9)
     at_w = ca.SX.sym("at_w", 3)
-    qc_wb = SO3Quat.elem(ca.SX.sym("qc_wb", 4))  # camera orientation
+    q_wb = SO3Quat.elem(ca.SX.sym("q_wb", 4))  # orientation
     z_i = ca.SX.sym("z_i")  # z velocity error integral
     dt = ca.SX.sym("dt")  # time step
 
     # CALC
     # -------------------------------
     # get control input
-    K_se23 = ca.diag(ca.vertcat(kp_pos, kp_pos, kp_pos, kp_vel, kp_vel, kp_vel, kp))
+    B, K_se23, BK, ABK = se23_solve_control()
+    # K_se23 = ca.diag(ca.vertcat(0.5, 0.5, 0.5, 2.0, 2.0, 2.0, kp)) # gain used in mellinger control
+    K_se23 = ca.diag(ca.vertcat(0, 0, 0, 0, 0, 0, 0, 0, 0))
     u_zeta = se23.elem(zeta).left_jacobian() @ K_se23 @ zeta
 
     # attitude control
     u_omega = u_zeta[6:]
 
     # position control
-    u_v = u_zeta[0:3]
-    u_a = u_zeta[3:6]
+    uv = u_zeta[0:3]
+    ua = u_zeta[3:6]
 
     xW = ca.SX([1, 0, 0])
     yW = ca.SX([0, 1, 0])
@@ -175,9 +194,11 @@ def derive_outerloop_control():
     # F = - m * Kp' ep - m * Kv' * ev + mg zW + m at_w
     # Force is normalized by the weight (mg)
 
-    # normalized thrust vector
+    # normalized thrust vectorthrust
     p_norm_max = 0.3 * m * g
-    p_term = u_v + u_a + m * at_w
+    uv_w = q_wb @ uv
+    ua_w = q_wb @ ua
+    p_term = uv_w + ua_w + m * at_w
     p_norm = ca.norm_2(p_term)
     p_term = ca.if_else(p_norm > p_norm_max, p_norm_max * p_term / p_norm, p_term)
 
@@ -191,39 +212,14 @@ def derive_outerloop_control():
     # thrust
     nT = ca.norm_2(T)
 
-    # body up is aligned with thrust
-    zB = ca.if_else(nT > 1e-3, T / nT, zW)
-
-    # point y using desired camera direction
-    ec = SO3EulerB321.from_Quat(qc_wb)
-    yt = ec.param[0]
-    xC = ca.vertcat(ca.cos(yt), ca.sin(yt), 0)
-    yB = ca.cross(zB, xC)
-    nyB = ca.norm_2(yB)
-    yB = ca.if_else(nyB > 1e-3, yB / nyB, xW)
-
-    # point x using cross product of unit vectors
-    xB = ca.cross(yB, zB)
-
-    # desired attitude matrix
-    Rd_wb = ca.horzcat(xB, yB, zB)
-    # [bx_wx by_wx bz_wx]
-    # [bx_wy by_wy bz_wy]
-    # [bx_wz by_wz bz_wz]
-
-    # deisred euler angles
-    # note using euler angles as set point is not problematic
-    # using Lie group approach for control
-    qr_wb = SO3Quat.from_Matrix(Rd_wb)
-
     # FUNCTION
     # -------------------------------
     f_get_u = ca.Function(
-        "se23_position_control",
-        [thrust_trim, kp, zeta, at_w, qc_wb.param, z_i, dt],
-        [nT, qr_wb.param, z_i_2],
-        ["thrust_trim", "kp", "zeta", "at_w", "qc_wb", "z_i", "dt"],
-        ["nT", "qr_wb", "z_i_2"],
+        "se23_control",
+        [thrust_trim, kp, zeta, at_w, q_wb.param, z_i, dt],
+        [nT, z_i_2, u_omega, p_term[2]],
+        ["thrust_trim", "kp","zeta", "at_w", "q_wb", "z_i", "dt"],
+        ["nT", "z_i_2", "u_omega", "p_term"],
     )
 
     f_se23_attitude_control = ca.Function(
@@ -231,7 +227,7 @@ def derive_outerloop_control():
     )
 
     return {
-        "se23_position_control": f_get_u,
+        "se23_control": f_get_u,
         "se23_attitude_control": f_se23_attitude_control,
     }
 

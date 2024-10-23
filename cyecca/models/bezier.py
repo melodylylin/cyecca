@@ -13,9 +13,9 @@ print("python: ", sys.executable)
 
 g = 9.8  # grav accel m/s^2
 m = 2.0  # mass of vehicle
-J_xx = 0.0216666
-J_yy = 0.0216666
-J_zz = 0.04
+J_xx = 0.02166666666666667
+J_yy = 0.02166666666666667
+J_zz = 0.04000000000000001
 J_xz = 0
 
 
@@ -167,7 +167,7 @@ def derive_ref():
 
     tol = 1e-6  # tolerance for singularities
 
-    # flat output (input variables from trajectory planner)
+    # flat output in world frame (input variables from trajectory planner)
     p_e = ca.SX.sym("p_e", 3)  # position
     v_e = ca.SX.sym("v_e", 3)  # velocity
     a_e = ca.SX.sym("a_e", 3)  # accel
@@ -187,7 +187,7 @@ def derive_ref():
     # Solve for C_be
 
     # acceleration
-    thrust_e = m * (g * zh - a_e)
+    thrust_e = m * (g * zh + a_e)
 
     T = ca.norm_2(thrust_e)
     T = ca.if_else(T > tol, T, tol)  # can have singularity when T = 0, this prevents it
@@ -214,7 +214,7 @@ def derive_ref():
     # Solve for omega_eb_b
 
     # note h_omega z_b component can be ignored with dot product below
-    t2_e = m / T * j_e
+    t2_e = m / T * (j_e - ca.dot(zb_e, j_e)*zb_e)
     p = ca.dot(t2_e, yb_e)
     q = -ca.dot(t2_e, xb_e)
 
@@ -229,10 +229,10 @@ def derive_ref():
     # solve for r
     cos_phi = ca.cos(phi)
     cos_phi = ca.if_else(ca.fabs(cos_phi) > tol, cos_phi, 0)
-    r = (
-        -q * ca.tan(phi) + ca.cos(theta) * psi_dot / cos_phi
-    )  # from R_solve below, singularity at phi=pi
-
+    # r = (
+    #     -q * ca.tan(phi) + ca.cos(theta) * psi_dot / cos_phi
+    # )  # from R_solve below, singularity at phi=pi
+    r = ca.dot(psi_dot*zh, zb_e)
     T_dot = -ca.dot(m * j_e, zb_e)
 
     # Mellinger approach

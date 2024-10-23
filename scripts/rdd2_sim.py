@@ -6,6 +6,9 @@ from cyecca.models import rdd2, rdd2_loglinear, mr_ref_traj, bezier
 import casadi as ca
 import numpy as np
 
+import control
+from cyecca.lie.group_se23 import se23
+
 import rclpy
 import rclpy.clock
 from rclpy.node import Node
@@ -161,6 +164,7 @@ class Simulator(Node):
         self.PY = np.zeros(8)
         self.PZ = np.zeros(8)
         self.Ppsi = np.zeros(4)
+        self.M_ff = np.zeros(3)
 
     def update_estimator(self):
         """
@@ -332,15 +336,15 @@ class Simulator(Node):
                     self.PZ[i] = self.bezier_msg.curves[curve_idx].z[i]
                 for i in range(4):
                     self.Ppsi[i] = self.bezier_msg.curves[curve_idx].yaw[i]
-                [x, y, z, psi, dpsi, ddpsi, self.vw_sp, a, j, s] = self.eqs[
+                [x, y, z, psi, dpsi, ddpsi, self.vw_sp, self.aw_sp, j, s] = self.eqs[
                     "bezier_multirotor"
                 ](t, T, self.PX, self.PY, self.PZ, self.Ppsi)
-                [_, q_att, self.omega, _, M, _] = self.eqs["f_ref"](
-                    psi, dpsi, ddpsi, self.vw_sp, a, j, s
+                [_, self.q_sp, omega_ff, _, self.M_ff, thrust] = self.eqs["f_ref"](
+                    psi, dpsi, ddpsi, self.vw_sp, self.aw_sp, j, s
                 )
                 self.qc_sp = self.eqs["eulerB321_to_quat"](psi, 0, 0)
                 self.pw_sp = np.array([x, y, z]).reshape(-1)
-                print(
+                [_, self.q_sp, _] = self.eqs["position_control"](
                     thrust_trim,
                     self.pw_sp,
                     self.vw_sp,
@@ -351,18 +355,26 @@ class Simulator(Node):
                     self.z_i,
                     self.dt,
                 )
-                [thrust, self.q_sp, self.z_i] = self.eqs["position_control"](
-                    thrust_trim,
-                    self.pw_sp,
-                    self.vw_sp,
-                    self.aw_sp,
-                    self.qc_sp,
+                zeta = self.eqs["se23_error"](
                     self.pw,
                     self.vw,
+                    self.q,
+                    self.pw_sp,
+                    self.vw_sp,
+                    self.q_sp,
+                )
+                print(zeta)
+                [_, self.z_i, omega, p] = self.eqs["se23_control"](
+                    thrust_trim,
+                    k_p_att,
+                    zeta,
+                    self.aw_sp,
+                    self.q,
                     self.z_i,
                     self.dt,
                 )
-                omega_sp = self.eqs["attitude_control"](k_p_att, self.q, self.q_sp)
+                print(thrust)
+                omega_sp = omega + omega_ff
 
         else:
             self.get_logger().info("unhandled mode: %s" % self.input_mode)
@@ -392,11 +404,11 @@ class Simulator(Node):
         # self.get_logger().info('de0: %s' % self.de0)
         self.e0 = e1
         self.de0 = de1
-
+        M_sp = M + self.M_ff
         # ---------------------------------------------------------------------
         # control allocation
         # ---------------------------------------------------------------------
-        self.u, Fp, Fm, Ft, Msat = self.eqs["f_alloc"](F_max, l, CM, CT, thrust, M)
+        self.u, Fp, Fm, Ft, Msat = self.eqs["f_alloc"](F_max, l, CM, CT, thrust, M_sp)
         # self.get_logger().info('M: %s' % M)
         # self.get_logger().info('u: %s' % self.u)
 
@@ -737,9 +749,9 @@ class Simulator(Node):
         msg_odom.header.frame_id = "map"
         msg_odom.child_frame_id = "base_link"
         msg_odom.pose.covariance = P_full.reshape(-1)
-        msg_odom.pose.pose.position.x = self.est_x[0]
-        msg_odom.pose.pose.position.y = self.est_x[1]
-        msg_odom.pose.pose.position.z = self.est_x[2]
+        msg_odom.pose.pose.position.x = float(self.get_state_by_name("position_op_w_0"))
+        msg_odom.pose.pose.position.y = float(self.get_state_by_name("position_op_w_1"))
+        msg_odom.pose.pose.position.z = float(self.get_state_by_name("position_op_w_2"))
         msg_odom.twist.twist.linear.x = self.vb[0]
         msg_odom.twist.twist.linear.y = self.vb[1]
         msg_odom.twist.twist.linear.z = self.vb[2]
