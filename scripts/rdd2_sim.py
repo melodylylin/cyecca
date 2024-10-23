@@ -283,26 +283,38 @@ class Simulator(Node):
                 )
                 omega_sp = self.eqs["attitude_control"](k_p_att, self.q, self.q_sp)
             elif self.control_mode == "loglinear":
+                [_, self.q_sp, _] = self.eqs["position_control"](
+                    thrust_trim,
+                    self.pw_sp,
+                    self.vw_sp,
+                    self.aw_sp,
+                    self.qc_sp,
+                    self.pw,
+                    self.vw,
+                    self.z_i,
+                    self.dt,
+                )
                 zeta = self.eqs["se23_error"](
                     self.pw,
                     self.vw,
                     self.q,
                     self.pw_sp,
                     self.vw_sp,
-                    self.qc_sp,
+                    self.q_sp,
                 )
                 # position control: world frame
-                [thrust, self.q_sp, self.z_i] = self.eqs["se23_position_control"](
+                [thrust, self.z_i, omega_sp, p] = self.eqs["se23_control"](
                     thrust_trim,
                     k_p_att,
                     zeta,
                     self.aw_sp,
-                    self.qc_sp,
+                    self.q,
                     self.z_i,
                     self.dt,
                 )
                 # attitude control: q_br
-                omega_sp = self.eqs["so3_attitude_control"](k_p_att, self.q, self.q_sp)
+                # omega_sp = self.eqs["so3_attitude_control"](k_p_att, self.q, self.q_sp)
+                print(omega_sp)
         elif self.input_mode == "bezier":
             time_start_nsec = (
                 self.bezier_msg.time_start.sec * 1e9

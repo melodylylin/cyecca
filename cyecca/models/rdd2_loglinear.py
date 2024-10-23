@@ -142,7 +142,7 @@ def adC_matrix():
 def se23_solve_control():
     A = -ca.DM(se23.elem(ca.vertcat(0,0,0,0,0,9.8,0,0,0)).ad()+adC_matrix())
     B = ca.DM.eye(9)
-    Q = 2800*ca.DM.eye(9)  # penalize state
+    Q = 30*ca.DM.eye(9)  # penalize state
     R = 1*ca.DM.eye(9)  # penalize input
     K, _, _ = control.lqr(A, B, Q, R) 
     BK = B@K
@@ -176,7 +176,7 @@ def derive_outerloop_control():
     # get control input
     B, K_se23, BK, ABK = se23_solve_control()
     # K_se23 = ca.diag(ca.vertcat(0.5, 0.5, 0.5, 2.0, 2.0, 2.0, kp)) # gain used in mellinger control
-    K_se23 = ca.diag(ca.vertcat(0, 0, 0, 0, 0, 0, 0, 0, 0))
+    # K_se23 = ca.diag(ca.vertcat(0, 0, 0, 0, 0, 0, 0, 0, 0))
     u_zeta = se23.elem(zeta).left_jacobian() @ K_se23 @ zeta
 
     # attitude control
