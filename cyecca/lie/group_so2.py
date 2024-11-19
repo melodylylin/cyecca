@@ -46,7 +46,7 @@ class SO2LieAlgebra(LieAlgebra):
         return M
 
     def from_Matrix(self, arg: ca.SX) -> SO2LieAlgebraElement:
-        return self.elem(M[1, 0])
+        return self.elem(arg[1, 0])
 
     def wedge(self, arg: (ca.SX, ca.DM)) -> SO2LieAlgebraElement:
         return self.elem(param=arg)
@@ -79,7 +79,8 @@ class SO2LieGroup(LieGroup):
         """
         Default product uses matrix conversion
         """
-        return self.elem(left.param + right.param)
+        theta = ca.remainder(left.param + right.param, 2 * ca.pi)
+        return self.elem(theta)
 
     def product_r2(
         self, left: SO2LieGroupElement, right: R2LieAlgebraElement

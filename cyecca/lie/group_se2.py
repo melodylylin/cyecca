@@ -55,7 +55,7 @@ class SE2LieAlgebra(LieAlgebra):
         return ca.vertcat(ca.horzcat(arg.Omega.to_Matrix(), arg.v_b.param), ca.SX(1, 3))
 
     def from_Matrix(self, arg: ca.SX) -> SE2LieAlgebraElement:
-        raise NotImplementedError("")
+        raise self.elem(ca.vertcat(arg[0, 2], arg[1, 2], arg[1, 0]))
 
     def wedge(self, arg: (ca.SX, ca.DM)) -> SE2LieAlgebraElement:
         return self.elem(param=arg)

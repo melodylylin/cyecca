@@ -18,7 +18,7 @@ from cyecca.symbolic import SERIES
 
 # parameters
 g = 9.8  # grav accel m/s^2
-m = 2.24  # mass of vehicle
+m = 2.0  # mass of vehicle
 # thrust_delta = 0.9*m*g # thrust delta from trim
 # thrust_trim = m*g # thrust trim
 deg2rad = np.pi / 180  # degree to radian
@@ -74,7 +74,7 @@ def derive_control_allocation():
     F_thrust = A @ ca.vertcat(T_sat, 0, 0, 0)  # motor force for thrust
     F_sum = F_moment + F_thrust
 
-    saturation_logic = True
+    saturation_logic = False
 
     if saturation_logic:
         C1 = F_max - ca.mmax(F_sum)  # how much could increase thrust before sat

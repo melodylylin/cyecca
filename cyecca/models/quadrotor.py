@@ -180,12 +180,15 @@ def derive_model():
     # Fb_w = ca.if_else(position_ob_w[2] < 0, -1000*position_ob_w[2] * zAxis - 100 * velocity_w_p_w, ca.vertcat(0, 0, 0))
     # Fc_w = ca.if_else(position_oc_w[2] < 0, -1000*position_oc_w[2] * zAxis - 100 * velocity_w_p_w, ca.vertcat(0, 0, 0))
     # Fd_w = ca.if_else(position_od_w[2] < 0, -1000*position_od_w[2] * zAxis - 100 * velocity_w_p_w, ca.vertcat(0, 0, 0))
-
-    F_w = ca.if_else(  # ground
-        position_op_w[2] < 0,
-        -1000 * position_op_w[2] * zAxis - 1000 * velocity_w_p_w,
-        ca.vertcat(0, 0, 0),
-    )
+    use_ground = True
+    if use_ground:
+        F_w = ca.if_else(  # ground
+            position_op_w[2] < 0,
+            -1000 * position_op_w[2] * zAxis - 1000 * velocity_w_p_w,
+            ca.vertcat(0, 0, 0),
+        )
+    else:
+        F_w = ca.vertcat(0, 0, 0)
 
     F_b = q_bw @ F_w - CD * qbar * S * wX  # drag
 
@@ -206,8 +209,16 @@ def derive_model():
 
     # accelerometer zero in freefall (doesn't measure gravity)
     a_b = F_b / m
+    a_e = q_wb @ a_b
 
     F_b += q_bw @ (-m * g * zAxis)  # gravity
+    f_force_moment = ca.Function(
+        "f_force_moment",
+        [x, u, p],
+        [F_b, M_b, a_e],
+        ["x", "u", "p"],
+        ["F_b", "M_b", "a_e"],
+    )
 
     # kinematics
     derivative_omega_wb_b = ca.inv(J) @ (M_b - ca.cross(omega_wb_b, J @ omega_wb_b))

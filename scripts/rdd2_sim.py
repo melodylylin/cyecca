@@ -8,13 +8,21 @@ import numpy as np
 
 import control
 from cyecca.lie.group_se23 import se23
+from cyecca.lie.group_so3 import SO3EulerB321, SO3Quat
 
 import rclpy
 import rclpy.clock
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 
-from geometry_msgs.msg import PoseWithCovarianceStamped, TransformStamped, PoseStamped
+from geometry_msgs.msg import (
+    PoseWithCovarianceStamped,
+    TransformStamped,
+    PoseStamped,
+    Accel,
+    Vector3,
+    WrenchStamped,
+)
 from geometry_msgs.msg import TwistWithCovarianceStamped, TwistStamped
 from synapse_msgs.msg import BezierTrajectory
 from rosgraph_msgs.msg import Clock
@@ -44,6 +52,14 @@ class Simulator(Node):
         self.pub_twist = self.create_publisher(TwistStamped, "twist", 1)
         self.pub_path = self.create_publisher(Path, "path", 1)
         self.pub_imu = self.create_publisher(Imu, "imu", 1)
+        self.pub_accel = self.create_publisher(Accel, "accel", 1)
+        self.pub_accel_ff = self.create_publisher(Accel, "accel_ff", 1)
+        self.pub_euler = self.create_publisher(Vector3, "euler", 1)
+        self.pub_euler_sp = self.create_publisher(Vector3, "euler_sp", 1)
+        self.pub_twist_sp = self.create_publisher(TwistStamped, "twist_sp", 1)
+        self.pub_twist_ff = self.create_publisher(TwistStamped, "twist_ff", 1)
+        self.pub_wrench = self.create_publisher(WrenchStamped, "wrench", 1)
+        self.pub_wrench_sp = self.create_publisher(WrenchStamped, "wrench_sp", 1)
         self.tf_broadcaster = TransformBroadcaster(self)
         self.tf_static_broadcaster = StaticTransformBroadcaster(self)
 
@@ -113,7 +129,7 @@ class Simulator(Node):
         self.motor_pose = np.zeros(4, dtype=float)
         self.msg_path = Path()
         self.input_aetr = np.zeros(4, dtype=float)
-        self.input_mode = "velocity"
+        self.input_mode = "bezier"
         self.control_mode = "mellinger"
         self.i0 = 0.0  # integrators for attitude rate loop
         self.e0 = np.zeros(3, dtype=float)  # error for attitude rate loop
@@ -141,7 +157,13 @@ class Simulator(Node):
         self.jw_sp = np.zeros(3, dtype=float)  # jerk "
         self.sw_sp = np.zeros(3, dtype=float)  # snap "
 
-        # setpoints
+        self.a = np.zeros(3, dtype=float)  # accel "
+        self.euler = np.zeros(3, dtype=float)
+        self.euler_sp = np.zeros(3, dtype=float)
+
+        self.omega_sp = np.zeros(3, dtype=float)
+
+        # setpoints"p_term"
         self.q_sp = np.array([1, 0, 0, 0], dtype=float)  # quaternion setpoint
         self.qc_sp = np.array(
             [1, 0, 0, 0], dtype=float
@@ -165,6 +187,11 @@ class Simulator(Node):
         self.PZ = np.zeros(8)
         self.Ppsi = np.zeros(4)
         self.M_ff = np.zeros(3)
+        self.M = np.zeros(3)
+        self.M_b = np.zeros(3)
+        self.thrust = 0.0
+        self.thrust_ff = 0.0
+        self.omega_ff = np.zeros(3)
 
     def update_estimator(self):
         """
@@ -200,8 +227,8 @@ class Simulator(Node):
         thrust_delta = 0.5 * m * g
         thrust_trim = m * g
         # TODO move to constant section
-        F_max = 20
-        l = self.get_param_by_name("l_motor_0")  # assuming all the same
+        F_max = 1000
+        l = self.get_param_by_name("l_motor_0") / np.sqrt(2)  # assuming all the same
         CM = self.get_param_by_name("CM")
         CT = self.get_param_by_name("CT")
 
@@ -239,12 +266,12 @@ class Simulator(Node):
         # mode handling
         # ---------------------------------------------------------------------
         if self.input_mode == "acro":
-            [omega_sp, thrust] = self.eqs["input_acro"](
+            [omega_sp, self.thrust] = self.eqs["input_acro"](
                 thrust_trim, thrust_delta, self.input_aetr
             )
 
         elif self.input_mode == "auto_level":
-            [self.q_sp, thrust] = self.eqs["input_auto_level"](
+            [self.q_sp, self.thrust] = self.eqs["input_auto_level"](
                 thrust_trim,
                 thrust_delta,
                 self.input_aetr,
@@ -252,7 +279,7 @@ class Simulator(Node):
             )
             omega_sp = self.eqs["attitude_control"](k_p_att, self.q, self.q_sp)
 
-        elif self.input_mode == "velocity":
+        elif self.bezier_msg is None or self.input_mode == "velocity":
             reset_position = False
             [
                 self.psi_sp,
@@ -270,7 +297,7 @@ class Simulator(Node):
                 reset_position,
             )
             if self.control_mode == "mellinger":
-                [thrust, self.q_sp, self.z_i] = self.eqs["position_control"](
+                [self.thrust, self.q_sp, self.z_i] = self.eqs["position_control"](
                     thrust_trim,
                     self.pw_sp,
                     self.vw_sp,
@@ -303,7 +330,7 @@ class Simulator(Node):
                     self.q_sp,
                 )
                 # position control: world frame
-                [thrust, self.z_i, omega_sp, p] = self.eqs["se23_control"](
+                [self.thrust, self.z_i, omega_sp, u_a] = self.eqs["se23_control"](
                     thrust_trim,
                     k_p_att,
                     zeta,
@@ -314,7 +341,7 @@ class Simulator(Node):
                 )
                 # attitude control: q_br
                 # omega_sp = self.eqs["so3_attitude_control"](k_p_att, self.q, self.q_sp)
-                print(omega_sp)
+                # print(omega_sp)
         elif self.input_mode == "bezier":
             time_start_nsec = (
                 self.bezier_msg.time_start.sec * 1e9
@@ -342,6 +369,7 @@ class Simulator(Node):
             if curve_idx < len(self.bezier_msg.curves):
                 T = (time_stop_nsec - time_start_nsec) * 1e-9
                 t = (time_nsec - time_start_nsec) * 1e-9
+                print(curve_idx, T, t)
                 for i in range(8):
                     self.PX[i] = self.bezier_msg.curves[curve_idx].x[i]
                     self.PY[i] = self.bezier_msg.curves[curve_idx].y[i]
@@ -351,12 +379,12 @@ class Simulator(Node):
                 [x, y, z, psi, dpsi, ddpsi, self.vw_sp, self.aw_sp, j, s] = self.eqs[
                     "bezier_multirotor"
                 ](t, T, self.PX, self.PY, self.PZ, self.Ppsi)
-                [_, self.q_sp, omega_ff, _, self.M_ff, thrust] = self.eqs["f_ref"](
-                    psi, dpsi, ddpsi, self.vw_sp, self.aw_sp, j, s
-                )
+                [_, self.q_sp, self.omega_ff, _, self.M_ff, self.thrust_ff] = self.eqs[
+                    "f_ref"
+                ](psi, dpsi, ddpsi, self.vw_sp, self.aw_sp, j, s)
                 self.qc_sp = self.eqs["eulerB321_to_quat"](psi, 0, 0)
                 self.pw_sp = np.array([x, y, z]).reshape(-1)
-                [_, self.q_sp, _] = self.eqs["position_control"](
+                [self.thrust, self.q_sp, self.z_i] = self.eqs["position_control"](
                     thrust_trim,
                     self.pw_sp,
                     self.vw_sp,
@@ -367,44 +395,51 @@ class Simulator(Node):
                     self.z_i,
                     self.dt,
                 )
-                zeta = self.eqs["se23_error"](
-                    self.pw,
-                    self.vw,
-                    self.q,
-                    self.pw_sp,
-                    self.vw_sp,
-                    self.q_sp,
+                omega = self.eqs["attitude_control"](k_p_att, self.q, self.q_sp)
+                # zeta = self.eqs["se23_error"](
+                #     self.pw,
+                #     self.vw,
+                #     self.q,
+                #     self.pw_sp,
+                #     self.vw_sp,
+                #     self.q_sp,
+                # )
+                # [self.thrust, self.z_i, omega, u_a] = self.eqs["se23_control"](
+                #     thrust_trim,
+                #     k_p_att,
+                #     zeta,
+                #     self.aw_sp,
+                #     self.q,
+                #     self.z_i,
+                #     self.dt,
+                # )
+                # self.a = self.aw_sp + u_a
+                # print("aw_sp", self.aw_sp)
+                self.omega_sp = omega + self.omega_ff
+                self.euler = np.rad2deg(
+                    ca.DM(SO3EulerB321.from_Quat(SO3Quat.elem(ca.DM(self.q))).param)
                 )
-                print(zeta)
-                [_, self.z_i, omega, p] = self.eqs["se23_control"](
-                    thrust_trim,
-                    k_p_att,
-                    zeta,
-                    self.aw_sp,
-                    self.q,
-                    self.z_i,
-                    self.dt,
+                self.euler_sp = np.rad2deg(
+                    ca.DM(SO3EulerB321.from_Quat(SO3Quat.elem(ca.DM(self.q_sp))).param)
                 )
-                print(thrust)
-                omega_sp = omega + omega_ff
 
         else:
             self.get_logger().info("unhandled mode: %s" % self.input_mode)
             omega_sp = np.zeros(3, dtype=float)
-            thrust = 0
+            self.thrust = 0
 
         # ---------------------------------------------------------------------
         # attitude rate control
         # ---------------------------------------------------------------------
         # print(omega_sp, self.i0, self.e0, self.de0)
-        M, i1, e1, de1, alpha = self.eqs["attitude_rate_control"](
+        self.M, i1, e1, de1, alpha = self.eqs["attitude_rate_control"](
             kp,
             ki,
             kd,
             f_cut,
             i_max,
             self.omega,
-            omega_sp,
+            self.omega_sp,
             self.i0,
             self.e0,
             self.de0,
@@ -416,11 +451,14 @@ class Simulator(Node):
         # self.get_logger().info('de0: %s' % self.de0)
         self.e0 = e1
         self.de0 = de1
-        M_sp = M + self.M_ff
+        M_sp = self.M_ff
+        # print("M_ff", M_sp)
         # ---------------------------------------------------------------------
         # control allocation
         # ---------------------------------------------------------------------
-        self.u, Fp, Fm, Ft, Msat = self.eqs["f_alloc"](F_max, l, CM, CT, thrust, M_sp)
+        self.u, Fp, Fm, Ft, Msat = self.eqs["f_alloc"](
+            F_max, l, CM, CT, self.thrust, M_sp
+        )
         # self.get_logger().info('M: %s' % M)
         # self.get_logger().info('u: %s' % self.u)
 
@@ -529,7 +567,7 @@ class Simulator(Node):
         try:
             # opts = {"abstol": 1e-9,"reltol":1e-9,"fsens_err_con": True,"calc_ic":True,"calc_icB":True}
             f_int = ca.integrator(
-                "test", "idas", self.model["dae"], self.t, self.t + self.dt
+                "test", "cvodes", self.model["dae"], self.t, self.t + self.dt
             )
             res = f_int(x0=self.x, z0=0, p=self.p, u=self.u)
         except RuntimeError as e:
@@ -559,6 +597,9 @@ class Simulator(Node):
         res["yf_gps_pos"] = self.model["g_gps_pos"](
             res["xf"], self.u, self.p, np.random.randn(3), self.dt
         )
+        [F_b, self.M_b, a_e] = self.model["f_force_moment"](res["xf"], self.u, self.p)
+        # print("force", F_b)
+        # print("a_e", a_e)
         self.y_gyro = np.array(res["yf_gyro"]).reshape(-1)
         self.y_mag = np.array(res["yf_mag"]).reshape(-1)
         self.y_accel = np.array(res["yf_accel"]).reshape(-1)
@@ -674,6 +715,19 @@ class Simulator(Node):
         tf.transform.rotation.z = qz
         self.tf_broadcaster.sendTransform(tf)
 
+        tf = TransformStamped()
+        tf.header.frame_id = "map"
+        tf.child_frame_id = "base_link_sp"
+        tf.header.stamp = msg_clock.clock
+        tf.transform.translation.x = float(self.pw_sp[0])
+        tf.transform.translation.y = float(self.pw_sp[1])
+        tf.transform.translation.z = float(self.pw_sp[2])
+        tf.transform.rotation.w = float(self.q_sp[0])
+        tf.transform.rotation.x = float(self.q_sp[1])
+        tf.transform.rotation.y = float(self.q_sp[2])
+        tf.transform.rotation.z = float(self.q_sp[3])
+        self.tf_broadcaster.sendTransform(tf)
+
         # publish motor tf2 transforms to see spin
         for i in range(self.model["n_motor"]):
             theta = self.get_param_by_name("theta_motor_" + str(i))
@@ -723,6 +777,48 @@ class Simulator(Node):
         self.pub_imu.publish(msg_imu)
 
         # ------------------------------------
+        # publish accel
+        # ------------------------------------
+        msg_accel = Accel()
+        msg_accel.linear.x = float(self.a[0])
+        msg_accel.linear.y = float(self.a[1])
+        msg_accel.linear.z = float(self.a[2])
+        msg_accel.angular.x = 0.0
+        msg_accel.angular.y = 0.0
+        msg_accel.angular.z = 0.0
+        self.pub_accel.publish(msg_accel)
+
+        # ------------------------------------
+        # publish accel ff
+        # ------------------------------------
+        msg_accel_ff = Accel()
+        msg_accel_ff.linear.x = float(self.aw_sp[0])
+        msg_accel_ff.linear.y = float(self.aw_sp[1])
+        msg_accel_ff.linear.z = float(self.aw_sp[2])
+        msg_accel_ff.angular.x = 0.0
+        msg_accel_ff.angular.y = 0.0
+        msg_accel_ff.angular.z = 0.0
+        self.pub_accel_ff.publish(msg_accel_ff)
+
+        # ------------------------------------
+        # publish euler
+        # ------------------------------------
+        msg_euler = Vector3()
+        msg_euler.x = float(self.euler[2])
+        msg_euler.y = float(self.euler[1])
+        msg_euler.z = float(self.euler[0])
+        self.pub_euler.publish(msg_euler)
+
+        # ------------------------------------
+        # publish euler sp
+        # ------------------------------------
+        msg_euler_sp = Vector3()
+        msg_euler_sp.x = float(self.euler_sp[2])
+        msg_euler_sp.y = float(self.euler_sp[1])
+        msg_euler_sp.z = float(self.euler_sp[0])
+        self.pub_euler_sp.publish(msg_euler_sp)
+
+        # ------------------------------------
         # publish pose with covariance stamped
         # ------------------------------------
         msg_pose = PoseWithCovarianceStamped()
@@ -747,11 +843,39 @@ class Simulator(Node):
         msg_pose_sp.pose.position.x = float(self.pw_sp[0])
         msg_pose_sp.pose.position.y = float(self.pw_sp[1])
         msg_pose_sp.pose.position.z = float(self.pw_sp[2])
-        msg_pose_sp.pose.orientation.w = float(self.qc_sp[0])
-        msg_pose_sp.pose.orientation.x = float(self.qc_sp[1])
-        msg_pose_sp.pose.orientation.y = float(self.qc_sp[2])
-        msg_pose_sp.pose.orientation.z = float(self.qc_sp[3])
+        msg_pose_sp.pose.orientation.w = float(self.q_sp[0])
+        msg_pose_sp.pose.orientation.x = float(self.q_sp[1])
+        msg_pose_sp.pose.orientation.y = float(self.q_sp[2])
+        msg_pose_sp.pose.orientation.z = float(self.q_sp[3])
         self.pub_pose_sp.publish(msg_pose_sp)
+
+        # ------------------------------------
+        # publish pose sp
+        # ------------------------------------
+        msg_wrench = WrenchStamped()
+        msg_wrench.header.stamp = msg_clock.clock
+        msg_wrench.header.frame_id = "base_link"
+        msg_wrench.wrench.torque.x = float(self.M_b[0])
+        msg_wrench.wrench.torque.y = float(self.M_b[1])
+        msg_wrench.wrench.torque.z = float(self.M_b[2])
+        msg_wrench.wrench.force.x = 0.0
+        msg_wrench.wrench.force.y = 0.0
+        msg_wrench.wrench.force.z = float(self.thrust)
+        self.pub_wrench.publish(msg_wrench)
+
+        # ------------------------------------
+        # publish pose sp
+        # ------------------------------------
+        msg_wrench_sp = WrenchStamped()
+        msg_wrench_sp.header.stamp = msg_clock.clock
+        msg_wrench_sp.header.frame_id = "base_link_sp"
+        msg_wrench_sp.wrench.torque.x = float(self.M_ff[0])
+        msg_wrench_sp.wrench.torque.y = float(self.M_ff[1])
+        msg_wrench_sp.wrench.torque.z = float(self.M_ff[2])
+        msg_wrench_sp.wrench.force.x = 0.0
+        msg_wrench_sp.wrench.force.y = 0.0
+        msg_wrench_sp.wrench.force.z = float(self.thrust_ff)
+        self.pub_wrench_sp.publish(msg_wrench_sp)
 
         # ------------------------------------
         # publish odometry
@@ -806,6 +930,34 @@ class Simulator(Node):
         msg_twist.twist.linear.y = vy
         msg_twist.twist.linear.z = vz
         self.pub_twist.publish(msg_twist)
+
+        # ------------------------------------
+        # publish twist sp
+        # ------------------------------------
+        msg_twist_sp = TwistStamped()
+        msg_twist_sp.header.stamp = msg_clock.clock
+        msg_twist_sp.header.frame_id = "base_link_sp"
+        msg_twist_sp.twist.angular.x = float(self.omega_sp[0])
+        msg_twist_sp.twist.angular.y = float(self.omega_sp[1])
+        msg_twist_sp.twist.angular.z = float(self.omega_sp[2])
+        msg_twist_sp.twist.linear.x = float(self.vw_sp[0])
+        msg_twist_sp.twist.linear.y = float(self.vw_sp[1])
+        msg_twist_sp.twist.linear.z = float(self.vw_sp[2])
+        self.pub_twist_sp.publish(msg_twist_sp)
+
+        # ------------------------------------
+        # publish twist sp
+        # ------------------------------------
+        msg_twist_ff = TwistStamped()
+        msg_twist_ff.header.stamp = msg_clock.clock
+        msg_twist_ff.header.frame_id = "base_link"
+        msg_twist_ff.twist.angular.x = float(self.omega_ff[0])
+        msg_twist_ff.twist.angular.y = float(self.omega_ff[1])
+        msg_twist_ff.twist.angular.z = float(self.omega_ff[2])
+        msg_twist_ff.twist.linear.x = 0.0
+        msg_twist_ff.twist.linear.y = 0.0
+        msg_twist_ff.twist.linear.z = 0.0
+        self.pub_twist_ff.publish(msg_twist_ff)
 
         # ------------------------------------
         # publish path message of previous poses
