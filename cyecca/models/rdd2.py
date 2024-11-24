@@ -74,7 +74,7 @@ def derive_control_allocation():
     F_thrust = A @ ca.vertcat(T_sat, 0, 0, 0)  # motor force for thrust
     F_sum = F_moment + F_thrust
 
-    saturation_logic = False
+    saturation_logic = True
 
     if saturation_logic:
         C1 = F_max - ca.mmax(F_sum)  # how much could increase thrust before sat

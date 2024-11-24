@@ -308,7 +308,7 @@ class Simulator(Node):
                     self.z_i,
                     self.dt,
                 )
-                omega_sp = self.eqs["attitude_control"](k_p_att, self.q, self.q_sp)
+                self.omega_sp = self.eqs["attitude_control"](k_p_att, self.q, self.q_sp)
             elif self.control_mode == "loglinear":
                 [_, self.q_sp, _] = self.eqs["position_control"](
                     thrust_trim,
@@ -330,7 +330,7 @@ class Simulator(Node):
                     self.q_sp,
                 )
                 # position control: world frame
-                [self.thrust, self.z_i, omega_sp, u_a] = self.eqs["se23_control"](
+                [self.thrust, self.z_i, self.omega_sp, u_a] = self.eqs["se23_control"](
                     thrust_trim,
                     k_p_att,
                     zeta,
@@ -451,7 +451,7 @@ class Simulator(Node):
         # self.get_logger().info('de0: %s' % self.de0)
         self.e0 = e1
         self.de0 = de1
-        M_sp = self.M_ff
+        M_sp = self.M
         # print("M_ff", M_sp)
         # ---------------------------------------------------------------------
         # control allocation

@@ -145,26 +145,26 @@ def adC_matrix():
 def se23_solve_control():
     A = -ca.DM(se23.elem(ca.vertcat(0, 0, 0, 0, 0, 9.8, 0, 0, 0)).ad() + adC_matrix())
     B = ca.DM.eye(9)
-    B = np.array(
-        [
-            [0, 0, 0, 0, 0, 0],  # vx
-            [0, 0, 0, 0, 0, 0],  # vy
-            [0, 0, 0, 0, 0, 0],  # vz
-            [1, 0, 0, 0, 0, 0],  # ax
-            [0, 1, 0, 0, 0, 0],  # ay
-            [0, 0, 1, 0, 0, 0],  # az
-            [0, 0, 0, 1, 0, 0],  # omega1
-            [0, 0, 0, 0, 1, 0],  # omega2
-            [0, 0, 0, 0, 0, 1],
-        ]
-    )  # omega3 # control omega1,2,3, and az
+    # B = np.array(
+    #     [   
+    #         [0, 0, 0, 0, 0, 0],  # vx
+    #         [0, 0, 0, 0, 0, 0],  # vy
+    #         [0, 0, 0, 0, 0, 0],  # vz
+    #         [1, 0, 0, 0, 0, 0],  # ax
+    #         [0, 1, 0, 0, 0, 0],  # ay
+    #         [0, 0, 1, 0, 0, 0],  # az
+    #         [0, 0, 0, 1, 0, 0],  # omega1
+    #         [0, 0, 0, 0, 1, 0],  # omega2
+    #         [0, 0, 0, 0, 0, 1],
+    #     ]
+    # )  # omega3 # control omega1,2,3, and az
     # Q = 100*ca.diag(ca.vertcat(10, 10, 10, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5))  # penalize state
-    Q = 10 * np.eye(9)  # penalize state
-    R = 1 * ca.DM.eye(6)  # penalize input
+    Q = 8 * np.eye(9)  # penalize state
+    R = 1 * ca.DM.eye(9)  # penalize input
     K, _, _ = control.lqr(A, B, Q, R)
     K = -K
     BK = B @ K
-    return B, K, BK, A + B @ K
+    return A, K, BK, A + B @ K
 
 
 def derive_outerloop_control():
