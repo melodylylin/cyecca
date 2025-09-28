@@ -236,9 +236,9 @@ def derive_outerloop_control():
     zB = ca.if_else(nT > 1e-3, T / nT, zW)
 
     # point y using desired camera direction
-    # ec = SO3EulerB321.from_Quat(qc_wb)
-    # yt = ec.param[0]
-    xC = ca.vertcat(1, 0, 0)
+    ec = SO3EulerB321.from_Quat(qc_wb)
+    yt = ec.param[0]
+    xC = ca.vertcat(ca.cos(yt), ca.sin(yt), 0)
     yB = ca.cross(zB, xC)
     nyB = ca.norm_2(yB)
     yB = ca.if_else(nyB > 1e-3, yB / nyB, xW)
