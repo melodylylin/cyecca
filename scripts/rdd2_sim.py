@@ -96,6 +96,7 @@ class Simulator(Node):
         self.eqs.update(rdd2.derive_attitude_control())
         self.eqs.update(rdd2.derive_velocity_control())
         self.eqs.update(rdd2.derive_position_control())
+        self.eqs.update(rdd2.derive_position_control_dist())
         self.eqs.update(rdd2.derive_input_auto_level())
         self.eqs.update(rdd2.derive_input_velocity())
         self.eqs.update(rdd2.derive_strapdown_ins_propagation())
@@ -106,6 +107,7 @@ class Simulator(Node):
         self.eqs.update(rdd2_loglinear.derive_se23_error())
         self.eqs.update(rdd2_loglinear.derive_so3_attitude_control())
         self.eqs.update(rdd2_loglinear.derive_outerloop_control())
+        self.eqs.update(rdd2_loglinear.derive_outerloop_control_dist())
         self.eqs.update(bezier.derive_multirotor())
         self.eqs.update(bezier.derive_ref())
         self.eqs.update(bezier.derive_eulerB321_to_quat())
@@ -131,10 +133,11 @@ class Simulator(Node):
 
         # attitude rate
         self.attr_kp = 20 * np.array([0.3, 0.3, 0.05], dtype=float)
-        self.attr_ki = 20 * np.array([0, 0, 0], dtype=float)
+        self.attr_ki = 20 * np.array([0, 0, 0.05], dtype=float)
         self.attr_kd = 20 * np.array([0.1, 0.1, 0], dtype=float)
         self.attr_f_cut = 10.0
         self.attr_i_max = np.array([0, 0, 0], dtype=float)
+        self.M_ff = np.array([0, 0, 0], dtype=float)
 
         # control set points
         self.omega_sp = np.zeros(3, dtype=float)
@@ -340,7 +343,7 @@ class Simulator(Node):
         )
 
     def update_attitude_rate(self):
-        self.M, i1, e1, de1, alpha = self.eqs["attitude_rate_control"](
+        self.M, i1, e1, de1, alpha, R_br = self.eqs["attitude_rate_control"](
             self.attr_kp,
             self.attr_ki,
             self.attr_kd,
@@ -348,6 +351,8 @@ class Simulator(Node):
             self.attr_i_max,
             self.omega,
             self.omega_sp,
+            self.q,
+            self.q_ref,
             self.i0,
             self.e0,
             self.de0,
@@ -356,6 +361,7 @@ class Simulator(Node):
         self.i0 = i1
         self.e0 = e1
         self.de0 = de1
+        self.M = self.M + self.M_ff
 
     def update_control_allocation(self):
         self.u, Fp, Fm, Ft, Msat = self.eqs["f_alloc"](
@@ -422,7 +428,7 @@ class Simulator(Node):
             "bezier_multirotor"
         ](t, T, self.PX, self.PY, self.PZ, self.Ppsi)
 
-        [_, q_att, self.omega, _, M, _] = self.eqs["f_ref"](
+        [_, q_att, self.omega, _, self.M_ff, _] = self.eqs["f_ref"](
             psi,
             dpsi,
             ddpsi,

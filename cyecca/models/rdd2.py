@@ -26,7 +26,7 @@ Jy = 0.02166666666666667
 Jz = 0.04000000000000001
 
 # position loop
-kp_pos = 2.0  # position proportional gain
+kp_pos = 5.0  # position proportional gain
 kp_vel = 4.0  # velocity proportional gain
 # pos_sp_dist_max = 2 # position setpoint max distance
 # vel_max = 2.0 # max velocity command
@@ -385,6 +385,8 @@ def derive_attitude_rate_control():
     # -------------------------------
     omega = ca.SX.sym("omega", 3)
     omega_r = ca.SX.sym("omega_r", 3)
+    q = ca.SX.sym("q", 4)
+    q_r = ca.SX.sym("q_r", 4)
     i0 = ca.SX.sym("i0", 3)
     e0 = ca.SX.sym("e0", 3)
     de0 = ca.SX.sym("de0", 3)
@@ -394,7 +396,10 @@ def derive_attitude_rate_control():
     # -------------------------------
 
     # actual attitude, expressed as quaternion
-    e1 = omega_r - omega
+    R_b = SO3Quat.elem(q)
+    R_r = SO3Quat.elem(q_r)
+    R_br = (R_b.inverse() * R_r).to_Matrix()
+    e1 = R_br@omega_r - omega
     alpha = 2 * ca.pi * dt * f_cut / (2 * ca.pi * dt * f_cut + 1)
     de1 = alpha * ((e1 - e0) / dt) + (1 - alpha) * de0
     # first order deriv approx, with low pass filter
@@ -402,7 +407,8 @@ def derive_attitude_rate_control():
     # integral action helps balance distrubance moments (e.g. center of gravity offset)
     i1 = saturatem(i0 + e1 * dt, -i_max, i_max)
     J = ca.diag(ca.vertcat(Jx, Jy, Jz))
-    M = J @ (kp * e1 + ki * i1 + kd * de1)
+    # M = J @ (kp * e1 + ki * i1 + kd * de1)
+    M = so3.elem(e1).to_Matrix()@J@e1 + J @ (kp * e1 + ki * i1 + kd * de1)
 
     # FUNCTION
     # -------------------------------
@@ -416,12 +422,14 @@ def derive_attitude_rate_control():
             i_max,
             omega,
             omega_r,
+            q,
+            q_r,
             i0,
             e0,
             de0,
             dt,
         ],
-        [M, i1, e1, de1, alpha],
+        [M, i1, e1, de1, alpha, R_br],
         [
             "kp",
             "ki",
@@ -430,12 +438,14 @@ def derive_attitude_rate_control():
             "i_max",
             "omega",
             "omega_r",
+            "q",
+            "q_r",
             "i0",
             "e0",
             "de0",
             "dt",
         ],
-        ["M", "i1", "e1", "de1", "alpha"],
+        ["M", "i1", "e1", "de1", "alpha", "R_br"],
     )
 
     return {"attitude_rate_control": f_attitude_rate_control}
@@ -936,6 +946,7 @@ if __name__ == "__main__":
     eqs.update(derive_attitude_control())
     eqs.update(derive_velocity_control())
     eqs.update(derive_position_control())
+    eqs.update(derive_position_control_dist())
     eqs.update(derive_input_acro())
     eqs.update(derive_input_auto_level())
     eqs.update(derive_input_velocity())

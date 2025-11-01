@@ -2,7 +2,7 @@ import casadi as ca
 import numpy as np
 
 import cyecca
-
+from scipy import signal
 
 def derive_model():
     n_motor = 4
@@ -111,6 +111,7 @@ def derive_model():
     quaternion_wb = ca.SX.sym("quaternion_wb", 4)
     velocity_w_p_b = ca.SX.sym("velocity_w_p_b", 3)
     position_op_w = ca.SX.sym("position_op_w", 3)
+    t = ca.SX.sym("t")
 
     x = ca.vertcat(
         position_op_w,
@@ -118,6 +119,7 @@ def derive_model():
         quaternion_wb,
         omega_wb_b,
         omega_motor,
+        t
     )
 
     x0_defaults = {
@@ -138,6 +140,7 @@ def derive_model():
         "omega_motor_1": 0,
         "omega_motor_2": 0,
         "omega_motor_3": 0,
+        "t":0,
     }
 
     # u, input
@@ -215,11 +218,17 @@ def derive_model():
 
     F_b += q_bw @ (-m * g * zAxis)  # gravity
 
+    square_x = ca.sign(ca.sin(2*np.pi*0.1*t+np.pi/2))*0.0/np.sqrt(2)
+    square_y = ca.sign(ca.cos(2*np.pi*0.1*t+np.pi/2))*0.0/np.sqrt(2)
+    F_b += q_bw @ (m * square_x * xAxis)
+    F_b += q_bw @ (m * square_y * yAxis)
+
     # kinematics
     derivative_omega_wb_b = ca.inv(J) @ (M_b - ca.cross(omega_wb_b, J @ omega_wb_b))
     derivative_quaternion_wb = q_wb.right_jacobian() @ omega_wb_b
     derivative_position_op_w = q_wb @ velocity_w_p_b
     derivative_velocity_w_p_b = F_b / m - ca.cross(omega_wb_b, velocity_w_p_b)
+    derivative_t = 1
 
     # state derivative vector
     x_dot = ca.vertcat(
@@ -228,6 +237,7 @@ def derive_model():
         derivative_quaternion_wb,
         derivative_omega_wb_b,
         derivative_omega_motor,
+        derivative_t
     )
     f = ca.Function("f", [x, u, p], [x_dot], ["x", "u", "p"], ["x_dot"])
 

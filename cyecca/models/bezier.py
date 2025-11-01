@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import casadi as ca
 from cyecca.lie.group_so3 import SO3Quat, SO3EulerB321, SO3Dcm
+from cyecca.models.rdd2 import saturatem, saturate
 
 
 class Bezier:
@@ -144,6 +145,14 @@ def derive_dcm_to_quat():
 
     return {f.name(): f for f in functions}
 
+def derive_dcm_to_euler321():
+    R = SO3Dcm.elem(ca.SX.sym("R", 9))
+    e = SO3EulerB321.from_Dcm(R)
+
+    functions = [ca.Function("dcm_to_euler321", [R.param], [e.param], ["R"], ["e"])]
+
+    return {f.name(): f for f in functions}
+
 
 def derive_ref():
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -182,6 +191,7 @@ def derive_ref():
     thrust_e = m * (g * zh + a_e)
 
     T = ca.norm_2(thrust_e)
+    T = saturate(T, 0, 25)
     T = ca.if_else(T > tol, T, tol)  # can have singularity when T = 0, this prevents it
 
     zb_e = thrust_e / T
@@ -233,6 +243,7 @@ def derive_ref():
 
     M_b = J @ omega_dot_eb_b + ca.cross(omega_eb_b, J @ omega_eb_b)
 
+    M_b = saturatem(M_b, ca.vertcat(-1.0, -1.0, -1.0), ca.vertcat(1.0, 1.0, 1.0))
     # %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
     # Code Generation
 
