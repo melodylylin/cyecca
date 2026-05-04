@@ -303,7 +303,7 @@ class Simulator(Node):
                 self.vw_sp,
                 self.qc_sp,
             )
-            [self.thrust, self.z_i, omega, self.q_sp] = self.eqs["se23_control"](
+            [self.thrust, self.z_i, self.q_sp] = self.eqs["se23_control"](
                 self.thrust_trim,
                 self.BK,
                 self.ki,
