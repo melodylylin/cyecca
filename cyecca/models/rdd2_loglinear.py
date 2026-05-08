@@ -17,6 +17,7 @@ from cyecca.lie.group_se23 import (
     SE23LieAlgebraElement,
 )
 from cyecca.symbolic import SERIES
+from scipy import signal
 
 print("python: ", sys.executable)
 
@@ -113,6 +114,14 @@ def derive_so3_attitude_control():
     # -------------------------------
     q = ca.SX.sym("q", 4)  # actual quat
     q_r = ca.SX.sym("q_r", 4)  # quat setpoint
+    t = ca.SX.sym("t")
+    f = ca.SX.sym("f")
+
+    phi2 = 0.5
+    womega1 = ca.if_else(np.cos(2*np.pi*f*t+phi2)*0.01>0, 0.01, -0.01)
+    womega2 = ca.if_else(np.sin(2*np.pi*f*t+phi2)*0.01>0, 0.01, -0.01)
+    womega3 = ca.if_else(np.sin(2*np.pi*f*t+phi2)*0.01>0, 0.01, -0.01)
+    w = np.array([womega1, womega2, womega3])
 
     # CALC
     # -------------------------------
@@ -121,13 +130,14 @@ def derive_so3_attitude_control():
 
     # Lie algebra
     e = (X.inverse() * X_r).log()  # angular velocity to get to desired att in 1 sec
+    k = so3_solve_control()
 
-    omega = so3.elem(e.param).left_jacobian() @ ca.diag(kp) @ e.param  # elementwise
+    omega = -so3.elem(e.param).left_jacobian() @ ca.diag(kp) @ e.param + w # elementwise +
 
     # FUNCTION
     # -------------------------------
     f_attitude_control = ca.Function(
-        "so3_attitude_control", [kp, q, q_r], [omega], ["kp", "q", "q_r"], ["omega"]
+        "so3_attitude_control", [kp, q, q_r, t, f], [omega], ["kp", "q", "q_r", "t", "f"], ["omega"]
     )
 
     return {"so3_attitude_control": f_attitude_control}
@@ -141,6 +151,29 @@ def adC_matrix():
 
     return adC
 
+def so3_solve_control():
+    A = -ca.DM(so3.elem(ca.vertcat(0, 0, 0)).ad())
+    B = ca.DM.eye(3)
+    # B = np.array(
+    #     [   
+    #         [0, 0, 0, 0, 0, 0],  # vx
+    #         [0, 0, 0, 0, 0, 0],  # vy
+    #         [0, 0, 0, 0, 0, 0],  # vz
+    #         [1, 0, 0, 0, 0, 0],  # ax
+    #         [0, 1, 0, 0, 0, 0],  # ay
+    #         [0, 0, 1, 0, 0, 0],  # az
+    #         [0, 0, 0, 1, 0, 0],  # omega1
+    #         [0, 0, 0, 0, 1, 0],  # omega2
+    #         [0, 0, 0, 0, 0, 1],
+    #     ]
+    # )  # omega3 # control omega1,2,3, and az
+    # Q = 100*ca.diag(ca.vertcat(10, 10, 10, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5))  # penalize state
+    Q = 8 * np.eye(3)  # penalize state
+    R = 1 * ca.DM.eye(3)  # penalize input
+    K, _, _ = control.lqr(A, B, Q, R)
+    K = -K
+    BK = B @ K
+    return BK
 
 def se23_solve_control():
     A = -ca.DM(se23.elem(ca.vertcat(0, 0, 0, 0, 0, 9.8, 0, 0, 0)).ad() + adC_matrix())
@@ -189,6 +222,14 @@ def derive_outerloop_control():
     q_wb = SO3Quat.elem(ca.SX.sym("q_wb", 4))  # orientation
     z_i = ca.SX.sym("z_i")  # z velocity error integral
     dt = ca.SX.sym("dt")  # time step
+    t = ca.SX.sym("t")  # time step
+    f = ca.SX.sym("f")
+
+    phi = 0.5
+    wax = ca.if_else(np.cos(2*np.pi*f*t+phi)*1>0, 1, -1)
+    way = ca.if_else(np.sin(2*np.pi*f*t+phi)*1>0, 1, -1)
+    waz = ca.if_else(np.sin(2*np.pi*f*t+phi)*1>0, 1, -1)
+    w = np.array([wax,way,waz])
 
     # CALC
     # -------------------------------
@@ -217,7 +258,7 @@ def derive_outerloop_control():
     # normalized thrust vectorthrust
     p_norm_max = 0.3 * m * g
     uv_w = q_wb @ uv
-    ua_w = q_wb @ ua
+    ua_w = q_wb @ ua  + w
     p_term = uv_w + ua_w + m * at_w
     p_norm = ca.norm_2(p_term)
     p_term = ca.if_else(p_norm > p_norm_max, p_norm_max * p_term / p_norm, p_term)
@@ -261,9 +302,9 @@ def derive_outerloop_control():
     # -------------------------------
     f_get_u = ca.Function(
         "se23_control",
-        [thrust_trim, kp, zeta, at_w, q_wb.param, z_i, dt],
+        [thrust_trim, kp, zeta, at_w, q_wb.param, z_i, dt, t, f],
         [nT, z_i_2, u_omega, q_sp.param],
-        ["thrust_trim", "kp", "zeta", "at_w", "q_wb", "z_i", "dt"],
+        ["thrust_trim", "kp", "zeta", "at_w", "q_wb", "z_i", "dt", "t", "f"],
         ["nT", "z_i_2", "u_omega", "q_sp"],
     )
 
